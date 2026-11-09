@@ -22,7 +22,7 @@ import type {
   DestinationAsset,
   ReaderInterface,
   ResourceAsset,
-  SourceAsset,
+  ReadableAsset,
   NeonReaderHandle,
 } from "./types.d.ts";
 
@@ -51,7 +51,7 @@ export class Reader implements ReaderInterface {
    * the same as `undefined`.
    */
   static async fromAsset(
-    asset: SourceAsset,
+    asset: ReadableAsset,
     settingsOrContext?: C2paSettings | Context | null,
   ): Promise<Reader | null> {
     await validateSourceAssetSize(asset, resolveSdkConfig(settingsOrContext));
@@ -68,7 +68,7 @@ export class Reader implements ReaderInterface {
    */
   static async fromManifestDataAndAsset(
     manifestData: Buffer,
-    asset: SourceAsset,
+    asset: ReadableAsset,
     settingsOrContext?: C2paSettings | Context | null,
   ): Promise<Reader> {
     await validateSourceAssetSize(asset, resolveSdkConfig(settingsOrContext));

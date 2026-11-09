@@ -17,7 +17,7 @@ import {
   validateAssetSize,
   type SdkConfig,
 } from "@contentauth/c2pa-utilities";
-import type { SourceAsset } from "./types.d.ts";
+import type { ReadableAsset } from "./types.d.ts";
 
 // c2pa-node runs server-side, so it can reasonably support larger assets than c2pa-web,
 // and may be less resource-constrained in comparison.
@@ -29,7 +29,8 @@ export const MAX_SIZE_IN_BYTES = 10 * 10 ** 9; // 10 GB
  * For a `FileAsset`, this rejects an oversized file before it's read into memory.
  * For a `SourceBufferAsset`, the buffer is already fully allocated by the time this runs,
  * so the memory cost isn't prevented, only reader construction is. Prefer `path`
- * for large or untrusted assets.
+ * for large or untrusted assets. A `SourceStreamAsset` is checked against its declared
+ * `size`, before anything is read.
  * 
  * @param asset The asset to validate.
  * @param sdkConfig SDK config from a `Context`. A missing `maxSizeInBytes` falls back
@@ -40,7 +41,7 @@ export const MAX_SIZE_IN_BYTES = 10 * 10 ** 9; // 10 GB
  * @throws {AssetTooLargeError} If `sizeInBytes` exceeds the resolved limit.
  */
 export async function validateSourceAssetSize(
-  asset: SourceAsset,
+  asset: ReadableAsset,
   sdkConfig?: SdkConfig,
 ): Promise<void> {
   const maxSizeInBytes = resolveConfiguredMaxSizeInBytes(
@@ -50,6 +51,11 @@ export async function validateSourceAssetSize(
 
   if ("buffer" in asset) {
     validateAssetSize(asset.buffer.length, maxSizeInBytes);
+    return;
+  }
+
+  if ("stream" in asset) {
+    validateAssetSize(asset.stream.size, maxSizeInBytes);
     return;
   }
 

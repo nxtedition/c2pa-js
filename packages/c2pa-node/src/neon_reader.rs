@@ -19,7 +19,7 @@ use neon::prelude::*;
 use neon::types::buffer::TypedArray;
 use tokio::sync::Mutex;
 
-use crate::asset::parse_asset;
+use crate::asset::{parse_asset, parse_read_asset};
 use crate::error::{as_js_error, Error, Result};
 use crate::runtime::runtime;
 use crate::utils::parse_settings;
@@ -48,7 +48,7 @@ impl NeonReader {
         let channel = cx.channel();
         let source = cx
             .argument::<JsObject>(0)
-            .and_then(|obj| parse_asset(&mut cx, obj))?;
+            .and_then(|obj| parse_read_asset(&mut cx, obj))?;
 
         // Parse optional settings parameter (argument 1)
         let context_opt =
@@ -105,7 +105,7 @@ impl NeonReader {
         let manifest_data = cx.argument::<JsBuffer>(0)?;
         let asset = cx
             .argument::<JsObject>(1)
-            .and_then(|obj| parse_asset(&mut cx, obj))?;
+            .and_then(|obj| parse_read_asset(&mut cx, obj))?;
 
         // Parse optional settings parameter (argument 2) - note: settings are not currently used
         // for from_manifest_data_and_asset as the c2pa-rs API doesn't support context for this method yet

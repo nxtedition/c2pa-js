@@ -103,6 +103,48 @@ export interface FileAsset {
 export type SourceAsset = SourceBufferAsset | FileAsset;
 
 /**
+ * A source a {@link ReaderInterface} pulls bytes from by position, for instance a file on another
+ * machine read with HTTP range requests, so the asset needn't be on local disk or in memory.
+ *
+ * `read` has the shape of `fs.read`, so an open file descriptor can be passed straight through:
+ * `{ size, read: (buffer, offset, length, position, callback) => fs.read(fd, buffer, offset, length, position, callback) }`.
+ * The reader hands it the same buffer each time and reads from it only once `callback` is
+ * called, so the source mustn't keep or reuse it afterwards.
+ */
+export interface SourceStream {
+  // The asset's size in bytes.
+  size: number;
+  // Reads up to `length` bytes at `position` into `buffer` at `offset`, then calls `callback`
+  // with the number of bytes read, or with an error. Fewer bytes than asked ends the asset there.
+  read(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number,
+    callback: (err: Error | null, bytesRead?: number) => void,
+  ): void;
+  // The most bytes asked for in one `read`, and the size of the buffer it's given. Larger
+  // values mean fewer calls. The default is 1 MiB.
+  bufferSize?: number;
+}
+
+/**
+ * A source asset read by position through a {@link SourceStream}. Only a reader accepts one.
+ */
+export interface SourceStreamAsset {
+  // The source the asset is read from
+  stream: SourceStream;
+  // The MIME type of the asset, for instance `video/mp4`. Supply it when it's known since the
+  // format is otherwise detected from the asset's bytes.
+  mimeType?: string;
+}
+
+/**
+ * An asset a reader can read: in memory, on disk, or read by position through a stream.
+ */
+export type ReadableAsset = SourceAsset | SourceStreamAsset;
+
+/**
  * An destination asset that can either be in memory or on disk
  * This is a workaround since Neon does not support streams
  */

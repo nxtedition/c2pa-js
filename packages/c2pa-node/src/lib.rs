@@ -16,6 +16,7 @@ use neon::prelude::*;
 mod asset;
 mod error;
 mod runtime;
+mod stream;
 mod utils;
 
 pub mod neon_builder;

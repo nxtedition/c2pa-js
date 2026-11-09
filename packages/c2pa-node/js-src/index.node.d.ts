@@ -22,6 +22,7 @@ import type {
   ManifestAssertionKind,
   SignerPayload,
   SigningAlg,
+  ReadableAsset,
   SourceAsset,
   TrustmarkConfig,
   NeonCallbackSignerHandle,
@@ -90,11 +91,11 @@ declare module "index.node" {
 
   // Reader methods
   export function readerFromAsset(
-    asset: SourceAsset,
+    asset: ReadableAsset,
   ): Promise<NeonReaderHandle>;
   export function readerFromManifestDataAndAsset(
     manifestData: Buffer,
-    asset: SourceAsset,
+    asset: ReadableAsset,
   ): Promise<NeonReaderHandle>;
   export function readerJson(): string;
   export function readerRemoteUrl(): string;

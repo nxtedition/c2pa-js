@@ -100,6 +100,26 @@ const remoteUrl = reader.remoteUrl();
 
 `Reader.fromAsset` and `Reader.fromManifestDataAndAsset` reject assets larger than 10 GB, throwing `AssetTooLargeError` (exported from `@contentauth/c2pa-node`). Note that for a `SourceBufferAsset`, this only rejects after the buffer is already fully allocated in memory. Pass a `FileAsset` instead for large or untrusted assets so oversized files are rejected before being read into memory.
 
+#### Reading from a stream
+
+A `Reader` can also read an asset that is neither on local disk nor in memory, for instance a file on another machine read with HTTP range requests. Pass a `stream` with the asset's `size` and a `read` function shaped like `fs.read`. The reader asks for one block at a time, of up to `bufferSize` bytes (1 MiB by default), and an asset with a declared `size` over the limit is rejected before anything is read.
+
+```javascript
+import fs from 'node:fs';
+
+const fd = fs.openSync('video.mp4', 'r');
+const reader = await Reader.fromAsset({
+  mimeType: 'video/mp4',
+  stream: {
+    size: fs.fstatSync(fd).size,
+    read: (buffer, offset, length, position, callback) =>
+      fs.read(fd, buffer, offset, length, position, callback),
+  },
+});
+```
+
+The reader passes the same buffer to every `read` call and copies from it once `callback` is called, so the source must not keep it. Only `Reader` accepts a stream asset, and `Builder` methods throw a `TypeError` for one.
+
 > [!WARNING]
 > `mimeType` is optional on the input asset for `Reader.fromAsset`/`Reader.fromManifestDataAndAsset`. If it's omitted and cannot be inferred from the file extension, the native library falls back to detecting the format from the asset's bytes. **This is not a feature to lean on.** Always supply `mimeType` when it's known, as byte-based detection is slower than a direct lookup and can be unreliable, which could surface as more confusing errors later on. Only omit it when the caller has no way to determine the asset's format. `Builder` methods always require a `mimeType` to be provided.
 

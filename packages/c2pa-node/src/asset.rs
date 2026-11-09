@@ -20,6 +20,7 @@ use neon::prelude::*;
 use neon::types::buffer::TypedArray;
 
 use crate::error::Error;
+use crate::stream::JsStream;
 
 pub(crate) trait NeonReadStreamTrait: Read + Seek + Send {}
 pub(crate) trait NeonWriteStreamTrait: Write + Read + Seek + Send {}
@@ -34,6 +35,8 @@ pub enum Asset {
     SourceBuffer(Vec<u8>, Option<String>),
     File(String, Option<String>),
     DestinationBuffer(Vec<u8>),
+    /// Read by position through a JavaScript source. Only a reader accepts one.
+    Stream(JsStream, Option<String>),
 }
 
 impl Asset {
@@ -49,6 +52,7 @@ impl Asset {
     pub fn mime_type(&self) -> Option<String> {
         match self {
             Asset::SourceBuffer(_, mime_type) => mime_type.clone(),
+            Asset::Stream(_, mime_type) => mime_type.clone(),
             Asset::File(path, mime_type) => mime_type
                 .clone()
                 .or_else(|| format_from_path(Path::new(&path))),
@@ -62,6 +66,7 @@ impl Asset {
                 let file = File::open(Path::new(&path)).map_err(Error::from)?;
                 Ok(Box::new(BufReader::new(file)))
             }
+            Asset::Stream(stream, _) => Ok(Box::new(stream)),
             _ => Err(Error::Asset("Cannot write to source buffer".to_string())),
         }
     }
@@ -88,11 +93,32 @@ impl Asset {
             Asset::File(_, _) => "file",
             Asset::DestinationBuffer(_) => "destination_buffer",
             Asset::SourceBuffer(_, _) => "source_buffer",
+            Asset::Stream(_, _) => "stream",
         }
     }
 }
 
+/// Parses an asset a reader reads, which may also be a `stream` source read by position.
+pub fn parse_read_asset(cx: &mut FunctionContext, obj: Handle<JsObject>) -> NeonResult<Asset> {
+    match obj.get_opt::<JsObject, _, _>(cx, "stream")? {
+        Some(stream) => {
+            let mime_type = obj
+                .get_opt::<JsString, _, _>(cx, "mimeType")?
+                .map(|val| val.value(cx));
+            Ok(Asset::Stream(JsStream::parse(cx, stream)?, mime_type))
+        }
+        None => parse_asset(cx, obj),
+    }
+}
+
 pub fn parse_asset(cx: &mut FunctionContext, obj: Handle<JsObject>) -> NeonResult<Asset> {
+    // A stream source waits on the JavaScript thread, which the APIs taking this asset may be
+    // running on, so it would never be answered. Without this it would pass as a destination.
+    if obj.get_opt::<JsValue, _, _>(cx, "stream")?.is_some() {
+        return cx.throw_type_error(
+            "A stream asset can only be read with Reader; pass a buffer or a path",
+        );
+    }
     let mime_type = obj
         .get_opt::<JsString, _, _>(cx, "mimeType")?
         .map(|val| val.value(cx))

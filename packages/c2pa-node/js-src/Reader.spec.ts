@@ -15,11 +15,16 @@
 // import native objects from built native code
 import type { ManifestStore } from "@contentauth/c2pa-types";
 import path from "path";
+import { setTimeout } from "timers/promises";
+import { setFlagsFromString } from "v8";
+import { runInNewContext } from "vm";
 import fs from "fs-extra";
 import { AssetTooLargeError, Context } from "@contentauth/c2pa-utilities";
 
 import { Reader } from "./Reader.js";
+import { Builder } from "./Builder.js";
 import { MAX_SIZE_IN_BYTES } from "./assetSize.js";
+import type { SourceStream } from "./types.d.ts";
 
 const tempDir = path.join(__dirname, "tmp");
 
@@ -379,5 +384,244 @@ describe("Reader", () => {
 
     const reader = await Reader.fromAsset(asset);
     expect(reader).toBeNull();
+  });
+
+  describe("from a stream", () => {
+    // A stream over an open file that counts its reads. `fs.read` has the shape a stream's
+    // `read` takes, so it is passed straight through.
+    async function fileStream(
+      filePath: string,
+      overrides: Partial<SourceStream> = {}
+    ): Promise<{
+      stream: SourceStream;
+      reads: () => number;
+      close: () => Promise<void>;
+    }> {
+      const fd = await fs.open(filePath, "r");
+      const { size } = await fs.fstat(fd);
+      let reads = 0;
+      const stream: SourceStream = {
+        size,
+        read(buffer, offset, length, position, callback) {
+          reads++;
+          fs.read(fd, buffer, offset, length, position, callback);
+        },
+        ...overrides,
+      };
+      return { stream, reads: () => reads, close: () => fs.close(fd) };
+    }
+
+    it("should read the same manifest store as from a file", async () => {
+      const { stream, close } = await fileStream("./tests/fixtures/CA.jpg");
+      try {
+        const reader = await Reader.fromAsset({
+          stream,
+          mimeType: "image/jpeg",
+        });
+        expect(reader).not.toBeNull();
+
+        const json = reader!.json();
+        expect(json.manifests).toEqual(manifestStore.manifests);
+        expect(json.active_manifest).toEqual(manifestStore.active_manifest);
+      } finally {
+        await close();
+      }
+    });
+
+    it("should read across many blocks with a small buffer", async () => {
+      const { stream, reads, close } = await fileStream(
+        "./tests/fixtures/CA.jpg",
+        {
+          bufferSize: 64,
+        }
+      );
+      try {
+        const reader = await Reader.fromAsset({ stream });
+        const json = reader!.json();
+        expect(json.manifests).toEqual(manifestStore.manifests);
+        expect(reads()).toBeGreaterThan(1);
+      } finally {
+        await close();
+      }
+    });
+
+    it("should read an asset smaller than the buffer in one call", async () => {
+      const { stream, reads, close } = await fileStream(
+        "./tests/fixtures/CA.jpg"
+      );
+      try {
+        await Reader.fromAsset({ stream, mimeType: "image/jpeg" });
+        expect(reads()).toBe(1);
+      } finally {
+        await close();
+      }
+    });
+
+    it("should return null for a stream without C2PA data", async () => {
+      const { stream, close } = await fileStream("./tests/fixtures/A.jpg");
+      try {
+        expect(
+          await Reader.fromAsset({ stream, mimeType: "image/jpeg" })
+        ).toBeNull();
+      } finally {
+        await close();
+      }
+    });
+
+    it("should read from manifest data and a stream", async () => {
+      const manifestData = await fs.readFile(
+        "./tests/fixtures/CA/manifest_data.c2pa"
+      );
+      const { stream, close } = await fileStream("./tests/fixtures/CA.jpg");
+      try {
+        const reader = await Reader.fromManifestDataAndAsset(manifestData, {
+          stream,
+          mimeType: "jpeg",
+        });
+        const json = reader!.json();
+        expect(json.manifests).toEqual(manifestStore.manifests);
+        expect(json.validation_status![0].code).toEqual(
+          "signingCredential.untrusted"
+        );
+      } finally {
+        await close();
+      }
+    });
+
+    it("should reject with the error a read calls back with", async () => {
+      const stream: SourceStream = {
+        size: 1000,
+        read(_buffer, _offset, _length, _position, callback) {
+          void Promise.resolve().then(() =>
+            callback(new Error("range request failed"))
+          );
+        },
+      };
+      await expect(
+        Reader.fromAsset({ stream, mimeType: "image/jpeg" })
+      ).rejects.toThrow("range request failed");
+    });
+
+    it("should reject when a read throws", async () => {
+      const stream: SourceStream = {
+        size: 1000,
+        read() {
+          throw new Error("no connection");
+        },
+      };
+      await expect(
+        Reader.fromAsset({ stream, mimeType: "image/jpeg" })
+      ).rejects.toThrow("no connection");
+    });
+
+    it("should reject when an error can't be turned into a message", async () => {
+      const unprintable = {
+        toString() {
+          throw new Error("toString failed");
+        },
+      };
+      const calledBack: SourceStream = {
+        size: 1000,
+        read(_buffer, _offset, _length, _position, callback) {
+          callback(unprintable as unknown as Error);
+        },
+      };
+      await expect(
+        Reader.fromAsset({ stream: calledBack, mimeType: "image/jpeg" })
+      ).rejects.toThrow("stream.read failed");
+
+      const thrown: SourceStream = {
+        size: 1000,
+        read() {
+          throw unprintable;
+        },
+      };
+      await expect(
+        Reader.fromAsset({ stream: thrown, mimeType: "image/jpeg" })
+      ).rejects.toThrow("stream.read failed");
+    });
+
+    it("should reject a read that reports an impossible number of bytes", async () => {
+      for (const bytesRead of [-1, 1.5, NaN, 1001, undefined]) {
+        const stream: SourceStream = {
+          size: 1000,
+          read(_buffer, _offset, _length, _position, callback) {
+            callback(null, bytesRead as number);
+          },
+        };
+        await expect(
+          Reader.fromAsset({ stream, mimeType: "image/jpeg" })
+        ).rejects.toThrow("bytes read of 1000 asked for");
+      }
+    });
+
+    it("should reject when a read drops its callback without calling it", async () => {
+      setFlagsFromString("--expose-gc");
+      const gc = runInNewContext("gc") as () => void;
+      const stream: SourceStream = { size: 1000, read() {} };
+      const settled = Reader.fromAsset({ stream, mimeType: "image/jpeg" }).then(
+        () => undefined,
+        (err: Error) => err
+      );
+      // A collection may take a few turns of the event loop to free the callback.
+      let err: Error | undefined;
+      for (let i = 0; i < 50 && !err; i++) {
+        gc();
+        err = await Promise.race([settled, setTimeout(10, undefined)]);
+      }
+      expect(err?.message).toContain(
+        "stream.read was dropped without calling back"
+      );
+    });
+
+    it("should ignore a second callback for the same read", async () => {
+      const { stream, close } = await fileStream("./tests/fixtures/CA.jpg", {
+        bufferSize: 64,
+      });
+      const read = stream.read;
+      stream.read = (buffer, offset, length, position, callback) =>
+        read(buffer, offset, length, position, (err, bytesRead) => {
+          callback(err, bytesRead);
+          callback(null, 0);
+        });
+      try {
+        const reader = await Reader.fromAsset({ stream });
+        expect(reader!.json().manifests).toEqual(manifestStore.manifests);
+      } finally {
+        await close();
+      }
+    });
+
+    it("should check the declared size before reading", async () => {
+      let reads = 0;
+      const stream: SourceStream = {
+        size: MAX_SIZE_IN_BYTES + 1,
+        read() {
+          reads++;
+        },
+      };
+      await expect(Reader.fromAsset({ stream })).rejects.toThrow(
+        AssetTooLargeError
+      );
+      expect(reads).toBe(0);
+    });
+
+    it("should reject an invalid size or buffer size", async () => {
+      const read = () => {};
+      await expect(
+        Reader.fromAsset({ stream: { size: -1, read } })
+      ).rejects.toThrow(RangeError);
+      await expect(
+        Reader.fromAsset({ stream: { size: 10, read, bufferSize: 0 } })
+      ).rejects.toThrow(RangeError);
+    });
+
+    it("should not be accepted where it would be read on the JavaScript thread", async () => {
+      const builder = await Builder.newAsync();
+      const stream: SourceStream = { size: 10, read() {} };
+      await expect(
+        builder.addResource("thumbnail.jpg", { stream } as never)
+      ).rejects.toThrow("A stream asset can only be read with Reader");
+    });
   });
 });
