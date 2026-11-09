@@ -1,0 +1,43 @@
+# Builds the @nxtedition/c2pa-node tarball the way upstream's release job does:
+# a release build on ubuntu-24.04, so dist/index.node is the x86_64 gnu binary.
+# The tarball is published by hand from the artifact.
+name: nxt package
+
+on:
+  push:
+    branches:
+      - nxt
+  workflow_dispatch:
+
+jobs:
+  pack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/install-dependencies
+        name: Install dependencies
+
+      # c2pa-node's own build compiles against the built workspace packages.
+      - name: Build dependencies
+        run: pnpm exec nx run-many -t build --projects=c2pa-types,@contentauth/c2pa-utilities
+
+      - name: Build
+        run: pnpm exec nx run c2pa-node:build
+
+      - name: Test
+        run: pnpm --filter @nxtedition/c2pa-node exec vitest run --config ./vitest.config.ts
+
+      - name: Pack
+        working-directory: packages/c2pa-node
+        run: |
+          pnpm pack
+          sha256sum dist/index.node | tee index.node.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c2pa-node
+          path: |
+            packages/c2pa-node/*.tgz
+            packages/c2pa-node/index.node.sha256

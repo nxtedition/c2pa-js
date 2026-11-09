@@ -1,11 +1,11 @@
 {
-  "name": "@contentauth/c2pa-node",
+  "name": "@nxtedition/c2pa-node",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/contentauth/c2pa-js.git",
+    "url": "git+https://github.com/nxtedition/c2pa-js.git",
     "directory": "packages/c2pa-node"
   },
-  "version": "0.10.0",
+  "version": "0.11.0-stream.0",
   "description": "Node.js bindings for C2PA",
   "main": "dist/index.js",
   "type": "module",
